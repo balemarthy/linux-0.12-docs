@@ -306,4 +306,13 @@ mov root_dev,ax   /*!< Move AX to root_dev */
  */
 jmpi 0,SETUPSEG   /*!< Jump to 0 in SETUPSEG */
 
-
+/*!
+ * Load the system at address 0x10000, ensuring no 64kB boundaries are crossed
+ * 
+ * This section of code loads the system at address 0x10000, ensuring no 64kB boundaries are crossed.
+ * The 'sread' variable keeps track of the number of sectors read.
+ * The 'head' and 'track' variables keep track of the current head and track.
+ * The 'read_it' function loads the system, and 'read_track' reads a track from the disk.
+ * The 'die' label creates an infinite loop if an error occurs.
+ */
+```
