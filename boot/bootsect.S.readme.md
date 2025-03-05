@@ -309,6 +309,233 @@ jmpi 0,SETUPSEG   /*!< Jump to 0 in SETUPSEG */
 /*!
  * Load the system at address 0x10000, ensuring no 64kB boundaries are crossed
  * 
+ * This routine loads the system at address 0x10000, making sure no 64kB boundaries are crossed.
+ * It tries to load the system as fast as possible, loading whole tracks whenever possible.
+ * 
+ * Registers:
+ * - `es` - starting address segment (normally 0x1000)
+ */
+sread:	.word 1+SETUPLEN	/*!< sectors read of current track */
+head:	.word 0			/*!< current head */
+track:	.word 0			/*!< current track */
+
+read_it:
+	mov ax,es /*!< Move the value in es to ax */
+	test ax,#0x0fff /*!< Test if ax is at a 64kB boundary */
+die:	jne die	/*!< Jump to die if es is not at a 64kB boundary */
+	xor bx,bx		/*!< Clear bx, setting it to 0 */
+rp_read:
+	mov ax,es /*!< Move the value in es to ax */
+	cmp ax,#ENDSEG /*!< Compare ax with ENDSEG */
+	jb ok1_read /*!< Jump to ok1_read if ax is below ENDSEG */
+	ret /*!< Return if ax is not below ENDSEG */
+ok1_read:
+	seg cs /*!< Use the code segment */
+	mov ax,sectors /*!< Move the value in sectors to ax */
+	sub ax,sread /*!< Subtract sread from ax */
+	mov cx,ax /*!< Move the result to cx */
+	shl cx,#9 /*!< Shift cx left by 9 bits (multiply by 512) */
+	add cx,bx /*!< Add bx to cx */
+	jnc ok2_read /*!< Jump to ok2_read if there is no carry */
+	je ok2_read /*!< Jump to ok2_read if cx is zero */
+	xor ax,ax /*!< Clear ax */
+	sub ax,bx /*!< Subtract bx from ax */
+	shr ax,#9 /*!< Shift ax right by 9 bits (divide by 512) */
+ok2_read:
+	call read_track /*!< Call read_track */
+	mov cx,ax /*!< Move the value in ax to cx */
+	add ax,sread /*!< Add sread to ax */
+	seg cs /*!< Use the code segment */
+	cmp ax,sectors /*!< Compare ax with sectors */
+	jne ok3_read /*!< Jump to ok3_read if ax is not equal to sectors */
+	mov ax,#1 /*!< Move 1 to ax */
+	sub ax,head /*!< Subtract head from ax */
+	jne ok4_read /*!< Jump to ok4_read if ax is not equal to head */
+	inc track /*!< Increment track */
+ok4_read:
+	mov head,ax /*!< Move ax to head */
+	xor ax,ax /*!< Clear ax */
+ok3_read:
+	mov sread,ax /*!< Move ax to sread */
+	shl cx,#9 /*!< Shift cx left by 9 bits (multiply by 512) */
+	add bx,cx /*!< Add cx to bx */
+	jnc rp_read /*!< Jump to rp_read if there is no carry */
+	mov ax,es /*!< Move the value in es to ax */
+	add ah,#0x10 /*!< Add 0x10 to ah */
+	mov es,ax /*!< Move ax to es */
+	xor bx,bx /*!< Clear bx */
+	jmp rp_read /*!< Jump to rp_read */
+
+/*!
+ * Read a track from the disk
+ * 
+ * This routine reads a track from the disk into memory.
+ * It uses BIOS interrupts to perform the read operation.
+ */
+read_track:
+	pusha /*!< Push all general-purpose registers onto the stack */
+	pusha	/*!< Push all general-purpose registers onto the stack again for extra safety */
+	mov	ax, #0xe2e 	/*!< Move 0xe2e (loading... message) to ax */
+	mov	bx, #7 /*!< Move 7 to bx */
+ 	int	0x10 /*!< Call BIOS interrupt 0x10 to display the loading message */
+	popa		/*!< Pop all general-purpose registers from the stack */
+
+	mov dx,track /*!< Move the value in track to dx */
+	mov cx,sread /*!< Move the value in sread to cx */
+	inc cx /*!< Increment cx */
+	mov ch,dl /*!< Move the lower 8 bits of dx to the upper 8 bits of cx */
+	mov dx,head /*!< Move the value in head to dx */
+	mov dh,dl /*!< Move the lower 8 bits of dx to the upper 8 bits of dx */
+	and dx,#0x0100 /*!< AND dx with 0x0100 to isolate the head bit */
+	mov ah,#2 /*!< Move 2 to ah (BIOS read sectors function) */
+	
+	push	dx		/*!< Save dx on the stack for error handling */
+	push	cx		/*!< Save cx on the stack for error handling */
+	push	bx		/*!< Save bx on the stack for error handling */
+	push	ax		/*!< Save ax on the stack for error handling */
+
+	int 0x13 /*!< Call BIOS interrupt 0x13 to read the track */
+	jc bad_rt /*!< Jump to bad_rt if there is a carry (error) */
+	add	sp, #8   	/*!< Adjust the stack pointer to remove saved registers */
+	popa /*!< Pop all general-purpose registers from the stack */
+	ret /*!< Return from the function */
+
+/*!
+ * Handle errors during track read
+ * 
+ * If an error occurs during track read, the error code is saved and printed.
+ * The routine then resets the disk controller and retries the read operation.
+ */
+bad_rt:	push	ax		/*!< Save ax on the stack for error code */
+	call	print_all	/*!< Call print_all to print the error and registers */
+	
+	xor ah,ah /*!< Clear ah */
+	xor dl,dl /*!< Clear dl */
+	int 0x13 /*!< Call BIOS interrupt 0x13 to reset the disk controller */
+
+	add	sp, #10 /*!< Adjust the stack pointer to remove saved registers and error code */
+	popa /*!< Pop all general-purpose registers from the stack */
+	jmp read_track /*!< Jump to read_track to retry the operation */
+
+/*!
+ * Print all registers
+ * 
+ * This routine prints out all of the registers for debugging purposes.
+ * It assumes the following stack frame:
+ * - `dx`
+ * - `cx`
+ * - `bx`
+ * - `ax`
+ * - `error`
+ * - `ret` <- sp
+ */
+print_all:
+	mov	cx, #5	/*!< Set cx to 5 (error code + 4 registers) */
+	mov	bp, sp	/*!< Move the stack pointer to bp */
+
+print_loop:
+	push	cx	/*!< Save cx on the stack */
+	call	print_nl	/*!< Call print_nl to print a newline for readability */
+	jae	no_reg	/*!< Jump to no_reg if cx is non-negative (no register name needed) */
+	
+	mov	ax, #0xe05 + 0x41 - 1 /*!< Move the ASCII value of 'A' to ax */
+	sub	al, cl /*!< Subtract cl from al to determine the register name */
+	int	0x10 /*!< Call BIOS interrupt 0x10 to print the register name */
+
+	mov	al, #0x58 	/*!< Move the ASCII value of 'X' to al */
+	int	0x10 /*!< Call BIOS interrupt 0x10 to print 'X' */
+
+	mov	al, #0x3a 	/*!< Move the ASCII value of ':' to al */
+	int	0x10 /*!< Call BIOS interrupt 0x10 to print ':' */
+
+/*!
+ * Print a register value in hexadecimal
+ * 
+ * This routine prints a register value in hexadecimal format.
+ */
+no_reg:
+	add	bp, #2	/*!< Move to the next register on the stack */
+	call	print_hex	/*!< Call print_hex to print the register value in hexadecimal */
+	pop	cx /*!< Restore cx from the stack */
+	loop	print_loop /*!< Loop back to print_loop if cx is not zero */
+	ret /*!< Return from the function */
+
+/*!
+ * Print a newline
+ * 
+ * This routine prints a newline (CR LF) for readability.
+ */
+print_nl:
+	mov	ax, #0xe0d	/*!< Move the ASCII value of carriage return (CR) to ax */
+	int	0x10 /*!< Call BIOS interrupt 0x10 to print CR */
+	mov	al, #0xa	/*!< Move the ASCII value of line feed (LF) to al */
+	int 	0x10 /*!< Call BIOS interrupt 0x10 to print LF */
+	ret /*!< Return from the function */
+
+/*!
+ * Print a word in hexadecimal format
+ * 
+ * This routine prints the word pointed to by ss:bp in hexadecimal format.
+ */
+print_hex:
+	mov	cx, #4	/*!< Set cx to 4 (4 hexadecimal digits) */
+	mov	dx, (bp)	/*!< Load the word at ss:bp into dx */
+print_digit:
+	rol	dx, #4	/*!< Rotate dx left by 4 bits to isolate the next nibble */
+	mov	ah, #0xe /*!< Set ah to 0xe for BIOS teletype output function */
+	mov	al, dl	/*!< Move the lower 4 bits of dx to al */
+	and	al, #0xf /*!< Mask al to isolate the nibble */
+	add	al, #0x30	/*!< Convert al to a digit (0-9) */
+	cmp	al, #0x39	/*!< Compare al with 0x39 to check if it is a digit */
+	jbe	good_digit /*!< Jump to good_digit if al is a digit */
+	add	al, #0x41 - 0x30 - 0xa 	/*!< Convert al to a letter (A-F) */
+
+good_digit:
+	int	0x10 /*!< Call BIOS interrupt 0x10 to print the digit */
+	loop	print_digit /*!< Loop back to print_digit if cx is not zero */
+	ret /*!< Return from the function */
+
+/*!
+ * Turn off the floppy drive motor
+ * 
+ * This procedure turns off the floppy drive motor, so
+ * that we enter the kernel in a known state, and
+ * don't have to worry about it later.
+ */
+kill_motor:
+	push dx /*!< Save dx on the stack */
+	mov dx,#0x3f2 /*!< Move the floppy disk controller port address to dx */
+	xor al, al /*!< Clear al */
+	out dx,al /*!< Output al to the floppy disk controller port */
+	pop dx /*!< Restore dx from the stack */
+	ret /*!< Return from the function */
+
+sectors:
+	.word 0 /*!< Define a word variable named sectors initialized to 0 */
+
+msg1:
+	.byte 13,10 /*!< Define a message with carriage return (CR) and line feed (LF) */
+	.ascii "Loading" /*!< Define the ASCII string "Loading" */
+
+.org 506 /*!< Set the location counter to 506 */
+swap_dev:
+	.word SWAP_DEV /*!< Define a word variable named swap_dev initialized to SWAP_DEV */
+root_dev:
+	.word ROOT_DEV /*!< Define a word variable named root_dev initialized to ROOT_DEV */
+boot_flag:
+	.word 0xAA55 /*!< Define a word variable named boot_flag initialized to 0xAA55 */
+
+.text
+endtext:
+.data
+enddata:
+.bss
+endbss:
+
+
+/*!
+ * Load the system at address 0x10000, ensuring no 64kB boundaries are crossed
+ * 
  * This section of code loads the system at address 0x10000, ensuring no 64kB boundaries are crossed.
  * The 'sread' variable keeps track of the number of sectors read.
  * The 'head' and 'track' variables keep track of the current head and track.
