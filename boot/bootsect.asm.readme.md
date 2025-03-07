@@ -24,46 +24,55 @@ The `bootsect.asm` file is divided into several sections:
 /*!
  * @brief Defines the number of setup sectors.
  */
+
 SETUPLEN equ 4
 
 /*!
  * @brief Defines the segment address for the boot sector.
  */
+
 BOOTSEG equ 0x07c0
 
 /*!
  * @brief Defines the segment address for the initialization code.
  */
+
 INITSEG equ 0x9000
 
 /*!
  * @brief Defines the segment address for the setup code.
  */
+
 SETUPSEG equ 0x9020
 
 /*!
  * @brief Defines the segment address for the system code.
  */
+
 SYSSEG equ 0x1000
 
 /*!
  * @brief Defines the size of the system code in segments.
  */
+
 SYSSIZE equ 0x3000
 
 /*!
  * @brief Defines the end segment address for the system code.
  */
+
 ENDSEG equ SYSSEG+SYSSIZE
 
 /*!
  * @brief Defines the root device identifier.
  */
+
 ROOT_DEV equ 0x0301
 
 /*!
  * @brief Defines the swap device identifier.
  */
+
 SWAP_DEV equ 0x0304
 
 
@@ -76,6 +85,7 @@ SWAP_DEV equ 0x0304
  * address at 0x7c00 to the new initialization segment at 0x90000. This is
  * done to free up the initial memory area for other uses.
  */
+
 start:
     mov ax, BOOTSEG /*!< Load the original boot sector segment address into AX */
     mov ds, ax /*!< Set DS to the original boot sector segment */
@@ -191,6 +201,7 @@ ok_load_setup:
  * 
  * This section loads the kernel into memory and prepares for execution.
  */
+
 mov ah, 0x03 /*!< Set AH to 3, read cursor position */
 xor bh, bh /*!< Clear BH */
 int 0x10 /*!< Call interrupt 0x10 */
@@ -225,6 +236,7 @@ je root_defined /*!< Jump if equal to root_defined */
 mov ax, 0x021c /*!< Set AX to /dev/PS0 - 1.44Mb */
 cmp bx, 18 /*!< Compare BX with 18 */
 je root_defined
+
 undef_root:
 jmp undef_root /*!< Jump to undef_root */
 root_defined:
