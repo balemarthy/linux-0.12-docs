@@ -491,3 +491,193 @@ good_digit:
     loop print_digit /*!< Loop back to print_digit if cx is not zero */
     ret /*!< Return from the function */
 
+### Reading a Track 
+
+
+/*!
+ * @brief Reads a track from the disk.
+ * 
+ * This routine reads a track from the disk into memory.
+ * It uses BIOS interrupts to perform the read operation.
+ */
+read_track:
+    pusha /*!< Push all general-purpose registers onto the stack */
+    pusha /*!< Push all general-purpose registers onto the stack again for extra safety */
+    mov ax, 0xe2e /*!< Move 0xe2e (loading... message) to ax */
+    mov bx, 7 /*!< Move 7 to bx */
+    int 0x10 /*!< Call BIOS interrupt 0x10 to display the loading message */
+    popa /*!< Pop all general-purpose registers from the stack */
+
+    mov dx,[track] /*!< Move the value in track to dx */
+    mov cx,[sread] /*!< Move the value in sread to cx */
+    inc cx /*!< Increment cx */
+    mov ch, dl /*!< Move the lower 8 bits of dx to the upper 8 bits of cx */
+    mov dx, [head] /*!< Move the value in head to dx */
+    mov dh, dl /*!< Move the lower 8 bits of dx to the upper 8 bits of dx */
+    and dx, 0x0100 /*!< AND dx with 0x0100 to isolate the head bit */
+    mov ah, 2 /*!< Move 2 to ah (BIOS read sectors function) */
+
+    push dx /*!< Save dx on the stack for error handling */
+    push cx /*!< Save cx on the stack for error handling */
+    push bx /*!< Save bx on the stack for error handling */
+    push ax /*!< Save ax on the stack for error handling */
+
+    int 0x13 /*!< Call BIOS interrupt 0x13 to read the track */
+    jc bad_rt /*!< Jump to bad_rt if there is a carry (error) */
+    add sp, 8 /*!< Adjust the stack pointer to remove saved registers */
+    popa /*!< Pop all general-purpose registers from the stack */
+    ret /*!< Return from the function */
+
+/*!
+ * @brief Handles errors during track read.
+ * 
+ * If an error occurs during track read, the error code is saved and printed.
+ * The routine then resets the disk controller and retries the read operation.
+ */
+bad_rt:
+    push ax /*!< Save ax on the stack for error code */
+    call print_all /*!< Call print_all to print the error and registers */
+
+    xor ah, ah /*!< Clear ah */
+    xor dl, dl /*!< Clear dl */
+    int 0x13 /*!< Call BIOS interrupt 0x13 to reset the disk controller */
+
+    add sp, 10 /*!< Adjust the stack pointer to remove saved registers and error code */
+    popa /*!< Pop all general-purpose registers from the stack */
+    jmp read_track /*!< Jump to read_track to retry the operation */
+
+
+### Printing Functions
+
+
+/*!
+ * @brief Prints all registers.
+ * 
+ * This routine prints out all of the registers for debugging purposes.
+ * It assumes the following stack frame:
+ * - `dx`
+ * - `cx`
+ * - `bx`
+ * - `ax`
+ * - `error`
+ * - `ret` <- sp
+ */
+print_all:
+    mov cx, 5 /*!< Set cx to 5 (error code + 4 registers) */
+    mov bp, sp /*!< Move the stack pointer to bp */
+
+print_loop:
+    push cx /*!< Save cx on the stack */
+    call print_nl /*!< Call print_nl to print a newline for readability */
+    jae no_reg /*!< Jump to no_reg if cx is non-negative (no register name needed) */
+
+    mov ax, 0xe05 + 0x41 - 1 /*!< Move the ASCII value of 'A' to ax */
+    sub al, cl /*!< Subtract cl from al to determine the register name */
+    int 0x10 /*!< Call BIOS interrupt 0x10 to print the register name */
+
+    mov al, 0x58 /*!< Move the ASCII value of 'X' to al */
+    int 0x10 /*!< Call BIOS interrupt 0x10 to print 'X' */
+
+    mov al, 0x3a /*!< Move the ASCII value of ':' to al */
+    int 0x10 /*!< Call BIOS interrupt 0x10 to print ':' */
+
+/*!
+ * @brief Prints a register value in hexadecimal.
+ * 
+ * This routine prints a register value in hexadecimal format.
+ */
+no_reg:
+    add bp, 2 /*!< Move to the next register on the stack */
+    call print_hex /*!< Call print_hex to print the register value in hexadecimal */
+    pop cx /*!< Restore cx from the stack */
+    loop print_loop /*!< Loop back to print_loop if cx is not zero */
+    ret /*!< Return from the function */
+
+/*!
+ * @brief Prints a newline.
+ * 
+ * This routine prints a newline (CR LF) for readability.
+ */
+print_nl:
+    mov ax, 0xe0d /*!< Move the ASCII value of carriage return (CR) to ax */
+    int 0x10 /*!< Call BIOS interrupt 0x10 to print CR */
+    mov al, 0xa /*!< Move the ASCII value of line feed (LF) to al */
+    int 0x10 /*!< Call BIOS interrupt 0x10 to print LF */
+    ret /*!< Return from the function */
+
+/*!
+ * @brief Prints a word in hexadecimal format.
+ * 
+ * This routine prints the word pointed to by ss:bp in hexadecimal format.
+ */
+print_hex:
+    mov cx, 4 /*!< Set cx to 4 (4 hexadecimal digits) */
+    mov dx, [bp] /*!< Load the word at ss:bp into dx */
+
+print_digit:
+    rol dx, 4 /*!< Rotate dx left by 4 bits to isolate the next nibble */
+    mov ah, 0xe /*!< Set ah to 0xe for BIOS teletype output function */
+    mov al, dl /*!< Move the lower 4 bits of dx to al */
+    and al, 0xf /*!< Mask al to isolate the nibble */
+
+    add al, 0x30 /*!< Convert al to a digit (0-9) */
+    cmp al, 0x39 /*!< Compare al with 0x39 to check if it is a digit */
+    jbe good_digit /*!< Jump to good_digit if al is a digit */
+    add al, 0x41 - 0x30 - 0xa /*!< Convert al to a letter (A-F) */
+good_digit:
+    int 0x10 /*!< Call BIOS interrupt 0x10 to print the digit */
+    loop print_digit /*!< Loop back to print_digit if cx is not zero */
+    ret /*!< Return from the function */
+
+
+### Floppy Drive Motor Control
+
+
+/*!
+ * @brief Turns off the floppy drive motor.
+ * 
+ * This procedure turns off the floppy drive motor, ensuring that the motor
+ * is not left running unnecessarily after the boot process.
+ */
+kill_motor:
+    push dx /*!< Save DX on the stack */
+    mov dx, 0x3f2 /*!< Set DX to the floppy disk controller port */
+    xor al, al /*!< Clear AL (turn off motor) */
+    out dx, al /*!< Output AL to DX (turn off the motor) */
+    pop dx /*!< Restore DX from the stack */
+    ret /*!< Return from the function */
+
+
+### Data Storage and Messages
+
+
+/*!
+ * @brief Stores the number of sectors.
+ */
+sectors dw 0
+
+/*!
+ * @brief Message for loading indication.
+ */
+msg1 db 13, 10,'Loading'
+
+/*!
+ * @brief Padding to ensure the boot sector is 512 bytes.
+ */
+times 506 - ($-$$) db 0
+
+/*!
+ * @brief Stores the swap device identifier.
+ */
+swap_dev dw SWAP_DEV
+
+/*!
+ * @brief Stores the root device identifier.
+ */
+root_dev dw ROOT_DEV
+
+/*!
+ * @brief Boot signature to indicate a valid boot sector.
+ */
+boot_flag dw 0xaa55
+
