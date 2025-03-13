@@ -132,3 +132,73 @@ __res;})
   - Uses **fast bit scanning** to improve performance.
 
 ---
+
+### **5. Freeing a Block (`free_block`)**
+
+int free_block(int dev, int block) {
+    struct super_block * sb;
+    struct buffer_head * bh;
+
+- **Declares pointers for `super_block` and `buffer_head` structures**, used to manage the filesystem.
+
+
+    if (!(sb = get_super(dev)))
+        panic("trying to free block on nonexistent device");
+
+- **Retrieves the superblock for the given device (`dev`)**.
+- If the device doesn’t exist, it triggers a **panic**.
+
+
+    if (block < sb->s_firstdatazone || block >= sb->s_nzones)
+        panic("trying to free block not in datazone");
+
+- **Ensures the block number is within valid datazone limits**.
+
+
+    bh = get_hash_table(dev,block);
+    if (bh) {
+        if (bh->b_count > 1) {
+            brelse(bh);
+            return 0;
+        }
+
+- **Fetches the buffer head for the block**.
+- If the buffer exists and **is still referenced (`b_count > 1`)**, releases it and returns.
+
+
+        bh->b_dirt=0;
+        bh->b_uptodate=0;
+        if (bh->b_count)
+            brelse(bh);
+    }
+
+- **Marks the buffer as clean (`b_dirt=0`) and invalid (`b_uptodate=0`)**.
+- Releases the buffer if it’s still in use.
+
+
+    block -= sb->s_firstdatazone - 1;
+
+- **Adjusts block index to align with bitmap**.
+
+    if (clear_bit(block&8191, sb->s_zmap[block/8192]->b_data)) {
+        printk("block (%04x:%d) ", dev, block + sb->s_firstdatazone - 1);
+        printk("free_block: bit already cleared\n");
+    }
+
+- **Clears the bit corresponding to the block in the zone bitmap**.
+- If the bit was **already cleared**, prints a warning.
+
+
+    sb->s_zmap[block/8192]->b_dirt = 1;
+    return 1;
+}
+
+- **Marks the zone bitmap as dirty (`b_dirt=1`)**, indicating a change.
+- Returns **1**, indicating success.
+
+#### **Why is this needed?**
+- Ensures **blocks are properly freed**.
+- Prevents **double freeing** by checking if the bit was already cleared.
+- Keeps **bitmap data consistent**, marking changes as dirty for syncing.
+
+---
