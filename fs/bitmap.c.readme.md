@@ -94,6 +94,8 @@ res;})
 - **Why is this needed?**
   - Ensures atomicity in modifying shared memory bitmaps.
 
+---
+
 ### **4. Finding the First Zero Bit (`find_first_zero`)**
 
 #define find_first_zero(addr) ({ \
