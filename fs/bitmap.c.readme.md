@@ -94,4 +94,39 @@ res;})
 - **Why is this needed?**
   - Ensures atomicity in modifying shared memory bitmaps.
 
+### **4. Finding the First Zero Bit (`find_first_zero`)**
 
+#define find_first_zero(addr) ({ \
+int __res; \
+__asm__("cld\n" \
+	"1:\tlodsl\n\t" \
+	"notl %%eax\n\t" \
+	"bsfl %%eax,%%edx\n\t" \
+	"je 2f\n\t" \
+	"addl %%edx,%%ecx\n\t" \
+	"jmp 3f\n" \
+	"2:\taddl $32,%%ecx\n\t" \
+	"cmpl $8192,%%ecx\n\t" \
+	"jl 1b\n" \
+	"3:" \
+	:"=c" (__res):"c" (0),"S" (addr):"ax","dx"); \
+__res;})
+
+
+#### **Explanation:**
+- **Purpose:** Finds the first unset (zero) bit in a bitmap, starting from the given address.
+- **How does it work?**
+  - **`cld`** → Clears the direction flag to process forward.
+  - **Loop (`1:`) reads one `long` (4 bytes) at a time**:
+    - **`lodsl`** → Loads a 32-bit value from the address `addr` into `EAX`.
+    - **`notl %%eax`** → Inverts bits in `EAX` (so zero bits become ones, helping find them).
+    - **`bsfl %%eax,%%edx`** → Finds the first set bit (originally zero) in `EAX`, storing position in `EDX`.
+    - **If no bit is found (`je 2f`)**, it moves to the next 32-bit chunk.
+  - **Loop increments bit counter (`addl %%edx,%%ecx`)**.
+  - **If all bits in `EAX` are 1s**, it moves to the next word (`addl $32, %%ecx`) and repeats.
+  - **Stops when `ecx >= 8192` (no free bits found).**
+- **Why is this needed?**
+  - Optimized search for free blocks in memory.
+  - Uses **fast bit scanning** to improve performance.
+
+---
