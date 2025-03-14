@@ -202,3 +202,236 @@ int free_block(int dev, int block) {
 - Keeps **bitmap data consistent**, marking changes as dirty for syncing.
 
 ---
+
+### **6. Allocating a New Block (`new_block`)**
+
+int new_block(int dev)
+
+#### **Explanation:**
+- **Purpose:** Allocates a new disk block in the bitmap.
+- **How does it work?**
+  - **Retrieve the Superblock:**
+
+     if (!(sb = get_super(dev)))
+        panic("trying to get new block from nonexistant device");
+
+     - Fetches the filesystem's superblock.
+     - If not found, it triggers a kernel panic.
+  - **Search for a Free Block:**
+
+     j = 8192;
+     for (i = 0; i < 8; i++)
+        if ((bh = sb->s_zmap[i]))
+            if ((j = find_first_zero(bh->b_data)) < 8192)
+                break;
+
+     - Loops over **bitmap blocks** to find a free bit.
+     - Uses `find_first_zero` to locate the first available block.
+  - **Check If a Block Was Found:**
+
+     if (i >= 8 || !bh || j >= 8192)
+        return 0;
+
+     - If no free block was found, return `0` (failure).
+  - **Set the Bit to Mark It as Used:**
+
+     if (set_bit(j, bh->b_data))
+        panic("new_block: bit already set");
+
+     - Marks the block as allocated.
+     - If the bit was **already set**, it triggers a **panic** (should never happen).
+  - **Adjust for Disk Offset:**
+
+     j += i * 8192 + sb->s_firstdatazone - 1;
+     if (j >= sb->s_nzones)
+        return 0;
+
+     - Converts **bitmap index** to **disk block number**.
+     - If out of range, return `0` (failure).
+  - **Fetch the Block and Initialize It:**
+
+     if (!(bh = getblk(dev, j)))
+        panic("new_block: cannot get block");
+     if (bh->b_count != 1)
+        panic("new block: count is != 1");
+     clear_block(bh->b_data);
+
+     - Fetches block from disk.
+     - Ensures it’s not in use (`b_count == 1`).
+     - Clears its contents using `clear_block`.
+  - **Mark Block as Dirty and Release It:**
+
+     bh->b_uptodate = 1;
+     bh->b_dirt = 1;
+     brelse(bh);
+     return j;
+
+     - Marks block as **dirty** (modified in memory but not written to disk).
+     - Releases the buffer.
+     - Returns the new block number.
+
+---
+
+### **7. Freeing an Inode (`free_inode`)**
+
+void free_inode(struct m_inode * inode)
+
+#### **Explanation:**
+- **Purpose:** Frees an inode by clearing its corresponding bit in the inode bitmap.
+- **How does it work?**
+  - **Check if the inode is NULL:**
+
+     if (!inode)
+        return;
+
+     - If `inode` is `NULL`, return immediately.
+  - **Check if the inode is associated with a device:**
+
+     if (!inode->i_dev) {
+        memset(inode,0,sizeof(*inode));
+        return;
+     }
+
+     - If the inode is not linked to a device, clear its memory and return.
+  - **Ensure inode is not in use:**
+
+     if (inode->i_count>1) {
+        printk("trying to free inode with count=%d\n", inode->i_count);
+        panic("free_inode");
+     }
+
+     - If `i_count` is greater than 1, it means the inode is still referenced elsewhere.
+     - A kernel panic is triggered if an active inode is attempted to be freed.
+  - **Ensure inode has no links:**
+
+     if (inode->i_nlinks)
+        panic("trying to free inode with links");
+
+     - If `i_nlinks > 0`, the inode is still linked to files, and freeing it is incorrect.
+  - **Retrieve the superblock and validate inode number:**
+
+     if (!(sb = get_super(inode->i_dev)))
+        panic("trying to free inode on nonexistent device");
+     if (inode->i_num < 1 || inode->i_num > sb->s_ninodes)
+        panic("trying to free inode 0 or nonexistent inode");
+
+     - Fetches the **superblock** to ensure valid inode data.
+     - If the inode number is out of range, it triggers a **panic**.
+  - **Retrieve inode bitmap and clear the inode bit:**
+
+     if (!(bh=sb->s_imap[inode->i_num>>13]))
+        panic("nonexistent imap in superblock");
+     if (clear_bit(inode->i_num&8191,bh->b_data))
+        printk("free_inode: bit already cleared.\n");
+
+     - Retrieves the **inode bitmap block**.
+     - Clears the bit corresponding to the inode.
+     - If the bit was already cleared, a message is printed.
+  - **Mark inode bitmap as dirty and clear inode memory:**
+
+     bh->b_dirt = 1;
+     memset(inode,0,sizeof(*inode));
+
+     - Marks the bitmap **dirty** (needs to be written to disk).
+     - Clears the inode structure.
+
+---
+
+### **4. Creating a New Inode (`new_inode`)**
+
+struct m_inode * new_inode(int dev)
+
+#### **Explanation:**
+- **Purpose:** Allocates a new inode by finding a free entry in the inode bitmap.
+- **How does it work?**
+  - **Declare required variables:**
+
+     struct m_inode * inode;
+     struct super_block * sb;
+     struct buffer_head * bh;
+     int i,j;
+
+     - `inode` → Pointer to the newly allocated inode.
+     - `sb` → Pointer to the superblock of the filesystem.
+     - `bh` → Buffer head for inode bitmap manipulation.
+     - `i, j` → Loop counters and indices for bitmap search.
+  - **Get an empty inode structure:**
+
+     if (!(inode=get_empty_inode()))
+        return NULL;
+
+     - Retrieves an unused inode from memory.
+     - If no free inode is available, returns `NULL`.
+  - **Retrieve the superblock:**
+
+     if (!(sb = get_super(dev)))
+        panic("new_inode with unknown device");
+
+     - Fetches the superblock corresponding to the given device `dev`.
+     - If the superblock does not exist, triggers a **kernel panic**.
+  - **Find a free inode in the bitmap:**
+
+     j = 8192;
+     for (i=0 ; i<8 ; i++)
+        if ((bh=sb->s_imap[i]))
+           if ((j=find_first_zero(bh->b_data))<8192)
+              break;
+
+     - Loops through the inode bitmap to locate the first **free** inode.
+     - Uses `find_first_zero(bh->b_data)` to search within each block.
+     - Stops when a **free inode** is found or all 8 blocks are checked.
+  - **Ensure a valid inode index:**
+
+     if (!bh || j >= 8192 || j+i*8192 > sb->s_ninodes) {
+        iput(inode);
+        return NULL;
+     }
+
+     - If no free inode is found or index exceeds the maximum inode count:
+       - Releases the `inode` reference using `iput()`.
+       - Returns `NULL`.
+  - **Mark the inode as allocated in the bitmap:**
+
+     if (set_bit(j,bh->b_data))
+        panic("new_inode: bit already set");
+
+     - Sets the corresponding bit in the inode bitmap.
+     - If the bit was **already set**, a **kernel panic** occurs.
+  - **Mark the bitmap block as dirty:**
+
+     bh->b_dirt = 1;
+
+     - Indicates that the **inode bitmap** has changed and must be written back to disk.
+  - **Initialize inode fields:**
+
+     inode->i_count=1;
+     inode->i_nlinks=1;
+     inode->i_dev=dev;
+     inode->i_uid=current->euid;
+     inode->i_gid=current->egid;
+     inode->i_dirt=1;
+     inode->i_num = j + i*8192;
+     inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+
+     - **`i_count = 1`** → The inode is now active.
+     - **`i_nlinks = 1`** → It has at least one link.
+     - **`i_dev = dev`** → Assigns the device ID.
+     - **`i_uid/i_gid`** → Inherits user and group ID from the current process.
+     - **`i_dirt = 1`** → Marks the inode as modified.
+     - **`i_num`** → Computes the absolute inode number.
+     - **Timestamps (`i_mtime`, `i_atime`, `i_ctime`)** → Set to current system time.
+  - **Return the newly allocated inode:**
+
+     return inode;
+
+     - Returns a pointer to the **allocated and initialized inode**.
+
+---
+
+
+
+
+
+
+
+
