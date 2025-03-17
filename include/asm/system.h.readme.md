@@ -1,4 +1,4 @@
-# **Inline Assembly Macros in Linux 0.12 **
+# Inline Assembly Macros in Linux 0.12 
 
 This document explains the inline **assembly macros** used in Kernel. These macros perform **low-level CPU operations**, such as **task switching, privilege level changes, and interrupt handling**.
 
