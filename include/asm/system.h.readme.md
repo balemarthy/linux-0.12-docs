@@ -282,8 +282,172 @@ __asm__ ("movw %%dx,%%ax\n\t" \
   - User-mode system calls are **permitted safely**.
 - These macros allow **fine-grained control** over **Linux's interrupt handling**.
 
+---
+# Segment Descriptor Macros in Linux 0.12
+
+## **Overview**
+These macros define how **segment descriptors** are set up in the **Global Descriptor Table (GDT)** and **Local Descriptor Table (LDT)**.
+Segment descriptors are used to define **code, data, and task state segments** in protected mode.
 
 ---
+
+## **10. `_set_seg_desc()` - The Core Macro**
+
+#define _set_seg_desc(gate_addr,type,dpl,base,limit) {
+    *(gate_addr) = ((base) & 0xff000000) | \
+        (((base) & 0x00ff0000)>>16) | \
+        ((limit) & 0xf0000) | \
+        ((dpl)<<13) | \
+        (0x00408000) | \
+        ((type)<<8); \
+    *((gate_addr)+1) = (((base) & 0x0000ffff)<<16) | \
+        ((limit) & 0x0ffff); }
+
+
+### **Explanation**
+- **Purpose:** Sets a **segment descriptor** in the **GDT/LDT**.
+- **What does it do?**
+  - Configures **code, data, or TSS segment descriptors**.
+  - Specifies **segment base address, limit, and type**.
+
+#### **Step-by-Step Breakdown**
+ **First 32-bit word of the descriptor (`*(gate_addr)`)**:
+   - **Extracts the base address**:
+     - **High byte** (`base & 0xFF000000`) is stored.
+     - **Middle byte** (`(base & 0x00FF0000) >> 16`) is extracted.
+   - **Sets the segment limit** (`limit & 0xF0000`).
+   - **Configures privilege level (DPL)** → `(dpl << 13)`.
+   - **Descriptor flags:**
+     - `0x00408000` enables present bit, granularity, and 32-bit operation.
+     - `(type << 8)` sets the segment type (code, data, TSS).
+
+ **Second 32-bit word of the descriptor (`*((gate_addr)+1)`)**:
+   - Stores the **low 16-bits of base address** (`(base & 0x0000FFFF) << 16`).
+   - Stores the **low 16-bits of the segment limit** (`limit & 0x0FFFF`).
+
+#### **Why is this needed?**
+- Defines memory segments used by the **kernel and processes**.
+- Sets up the **protected mode memory model**.
+- Used to create **code, data, and TSS descriptors**.
+
+---
+
+## **11. `_set_tssldt_desc()` - Setting Up TSS & LDT Descriptors**
+
+#define _set_tssldt_desc(n,addr,type) \
+__asm__ ("movw $104,%1\n\t" \
+    "movw %%ax,%2\n\t" \
+    "rorl $16,%%eax\n\t" \
+    "movb %%al,%3\n\t" \
+    "movb $" type ",%4\n\t" \
+    "movb $0x00,%5\n\t" \
+    "movb %%ah,%6\n\t" \
+    "rorl $16,%%eax" \
+    ::"a" (addr), "m" (*(n)), "m" (*(n+2)), "m" (*(n+4)), \
+     "m" (*(n+5)), "m" (*(n+6)), "m" (*(n+7)) \
+    )
+
+
+### **Explanation**
+- **Purpose:** Creates **Task State Segment (TSS) and Local Descriptor Table (LDT) entries**.
+- **How does it work?**
+  - Configures **104-byte TSS descriptor**.
+  - Stores **TSS/LDT base address and limit** in the GDT.
+
+#### **Step-by-Step Breakdown**
+**Set the segment limit to 104 bytes**:
+
+   movw $104, %1
+
+   - TSS segments are **always 104 bytes** in size.
+
+**Store the base address in two parts**:
+
+   movw %%ax, %2
+   rorl $16, %%eax
+   movb %%al, %3
+
+   - `movw %%ax, %2` → Stores **low 16 bits** of the base.
+   - `rorl $16, %%eax` → Rotates right to extract next byte.
+   - `movb %%al, %3` → Stores **middle byte**.
+
+**Store the descriptor type**:
+
+   movb $" type ", %4
+
+   - Sets the type (`0x89` for TSS, `0x82` for LDT).
+
+**Store high byte and reset `EAX`**:
+
+   movb $0x00, %5
+   movb %%ah, %6
+   rorl $16, %%eax
+
+   - **Finalizes the descriptor entry.**
+
+#### **Why is this needed?**
+- **TSS descriptors** are required for **task switching**.
+- **LDT descriptors** define per-process memory segments.
+
+---
+
+## **12. `set_tss_desc()` - Setting Up Task State Segments**
+
+#define set_tss_desc(n,addr) _set_tssldt_desc(((char *) (n)),addr,"0x89")
+
+
+### **Explanation**
+- **Purpose:** Sets up a **Task State Segment (TSS) descriptor**.
+- **How does it work?**
+  - Calls `_set_tssldt_desc()` with:
+    - **Type = `0x89`** → Indicates **TSS descriptor**.
+    - **Base = `addr`** → Stores TSS base address.
+  - Stores it in the **Global Descriptor Table (GDT)**.
+
+#### **Why is this needed?**
+- **TSS (Task State Segment)** is used for **hardware-based task switching**.
+- Stores CPU **register state, stack pointers, and I/O permissions**.
+
+---
+
+## **13. `set_ldt_desc()` - Setting Up Local Descriptor Tables**
+
+#define set_ldt_desc(n,addr) _set_tssldt_desc(((char *) (n)),addr,"0x82")
+
+
+### **Explanation**
+- **Purpose:** Sets up a **Local Descriptor Table (LDT) descriptor**.
+- **How does it work?**
+  - Calls `_set_tssldt_desc()` with:
+    - **Type = `0x82`** → Indicates **LDT descriptor**.
+    - **Base = `addr`** → Stores LDT base address.
+  - Stores it in the **Global Descriptor Table (GDT)**.
+
+#### **Why is this needed?**
+- **LDT (Local Descriptor Table)** defines memory segments for **user-space processes**.
+- Each process has its **own LDT**, separate from the **GDT**.
+
+---
+
+## **Summary of Segment Descriptor Macros**
+| **Macro** | **Type** | **Description** |
+|-----------|----------|----------------|
+| `_set_seg_desc()` | Code/Data Segments | Defines memory segments in GDT/LDT |
+| `_set_tssldt_desc()` | TSS/LDT Segments | Defines TSS/LDT in the GDT |
+| `set_tss_desc()` | Task State Segment | Configures CPU task switching |
+| `set_ldt_desc()` | Local Descriptor Table | Defines process-specific memory segments |
+
+---
+
+## **Why Are These Important?**
+- **Memory segmentation** is crucial in **protected mode**.
+- **TSS and LDTs** help manage **multitasking and memory protection**.
+- These macros **define CPU memory layout** for **Linux 0.12**.
+
+
+
+
+
 
 
 
