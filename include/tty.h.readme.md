@@ -208,5 +208,5 @@ This implementation demonstrates several important systems programming principle
 5. **POSIX compliance** through the termios structure
 6. **Memory efficiency** through fixed buffer sizes and shared code paths
 
-The terminal subsystem is one of the most critical interfaces between user applications and the kernel, making its design particularly important for system usability, reliability, and performance.
+    The terminal subsystem is one of the most critical interfaces between user applications and the kernel, making its design particularly important for system usability, reliability, and performance.
 
